@@ -7,6 +7,10 @@
   (value [this] "Get the current value")
   (object->str [this] "For printing"))
 
+(defprotocol CRDTSet
+  (add [this v])
+  (del [this v]))
+
 (defn- print-crdt [crdt]
   (.write *out* (object->str crdt)))
 
@@ -31,10 +35,13 @@
   (value [_] items)
   (object->str [this]
                (str (value this) " <GSet:" (str items) ">"))
+  CRDTSet
+  (add [this item]
+       (GSet. (conj items item)))
 
   clojure.lang.IPersistentSet
   (cons [this item]
-        (GSet. (conj items item)))
+        (.add this item))
   (empty [this]
          (GSet. #{}))
   (equiv [this other]
@@ -56,11 +63,11 @@
 (comment
   (defn example-g-set []
     (let [replica1 (-> (g-set)
-                       (conj :a)
-                       (conj :b))
+                       (add :a)
+                       (add :b))
           replica2 (-> (g-set)
-                       (conj :b)
-                       (conj :c))
+                       (add :b)
+                       (add :c))
           merged (merge* replica1 replica2)]
       {:replica1  replica1
        :replica2 replica2
@@ -77,12 +84,19 @@
   (object->str [this]
                (str (value this) " <TwoPSet:" "additions: " additions
                     "tombstone: " tombstone ">"))
+  CRDTSet
+  (add [this item]
+       (if (contains? tombstone item)
+         this
+         (TwoPSet. (conj additions item) tombstone)))
+  (del [this item]
+       (if (contains? additions item)
+         (TwoPSet. additions (conj tombstone item))
+         this))
 
   clojure.lang.IPersistentSet
   (cons [this item]
-        (if (contains? tombstone item)
-          this
-          (TwoPSet. (conj additions item) tombstone)))
+        (add this item))
   (empty [_]
          (TwoPSet. #{} #{}))
   (equiv [_ other]
@@ -95,8 +109,9 @@
   (contains [_ k]
             (and (contains? additions k)
                  (not (contains? tombstone k))))
-  (disjoin [this k]
-           (TwoPSet. additions (conj tombstone k))))
+  ;; (disjoin [this k]
+  ;;          (del this k))
+  )
 
 (defn two-p-set
   ([] (TwoPSet. #{} #{}))
@@ -105,12 +120,12 @@
 (comment ;; Example usage functions
   (defn example-2p-set []
     (let [replica1 (-> (two-p-set)
-                       (conj :a)
-                       (conj :b)
-                       (disj :a))
+                       (add :a)
+                       (add :b)
+                       (del :a))
           replica2 (-> (two-p-set)
-                       (conj :b)
-                       (conj :c))
+                       (add :b)
+                       (add :c))
           merged (merge* replica1 replica2)]
       {:replica1 replica1
        :replica2 replica2
@@ -124,7 +139,7 @@
   (value [_]
          (apply + (vals counts)))
   (object->str [this]
-               (str counts " <GCounter:"  counts ">")))
+               (str (value this) " <GCounter:"  counts ">")))
 
 (defn g-counter [replica-id]
   (GCounter. {replica-id 0}))
@@ -138,7 +153,7 @@
   (value [_]
          (- (apply + (vals increments)) (apply + (vals decrements))))
   (object->str [this]
-               (str increments decrements " <PNCounter:"  increments decrements ">")))
+               (str (value this) " <PNCounter:"  increments decrements ">")))
 
 (defn increase [counter replica-id]
   (cond (instance? GCounter counter)
@@ -185,57 +200,81 @@
        :pn2  pn2
        :merged (merge* pn1 pn2)})))
 
+
+;; LWW-Element-Set (Last-Write-Wins-Element-Set)
+(defcrdt LWWSet [additions removals]
+  CRDT
+  (merge* [this other]
+          (LWWSet. (merge-with max additions (.-additions other))
+                   (merge-with max removals (.-removals other))))
+  (value [_]
+         (set (for [[item ts0] additions
+                    :let [ts (get removals item 0)]
+                    :when (< ts0 ts)]
+                item)))
+  (object->str [this]
+               (str (value this) " <LWSet" additions removals ">"))
+
+  CRDTSet
+  (add [this [item ts]]
+       (let [ts0 (get additions item)]
+         (if (and ts0 (>= ts0 ts))
+           this
+           (LWWSet. (assoc additions item ts) removals))))
+  (del [this [item ts]]
+       (let [ts0 (get removals item)]
+         (if (and ts0 (>= ts0 ts))
+           this
+           (LWWSet. additions (assoc removals item ts))))))
+
+(defn lww-set []
+  (LWWSet. {} {}))
+
 (comment
-  ;; LWW-Element-Set (Last-Write-Wins-Element-Set)
-  (deftype LWWSet [additions removals]   ; Each is a map of element -> timestamp
-    CRDT
-    (merge* [this other]
-      (LWWSet.
-       (merge-with max (.-additions this) (.-additions other))
-       (merge-with max (.-removals this) (.-removals other))))
-    (value [_]
-      (set (for [elem (set/union (keys additions) (keys removals))
-                 :let [add-time (get additions elem 0)
-                       remove-time (get removals elem 0)]
-                 :when (> add-time remove-time)]
-             elem))))
+  (defn example-lww-set []
+    (let [lww1 (-> (lww-set)
+                   (add [:a 1])
+                   (add [:b 2]))
+          lww2 (-> (lww-set)
+                   (add [:b 3])
+                   (del [:a 4]))]
+      {:lww1  lww1
+       :lww2  lww2
+       :merged (merge* lww1 lww2)})))
 
-  (defn lww-set []
-    (LWWSet. {} {}))
+(defcrdt ORSet [elements]
+  CRDT
+  (merge* [this other]
+          (ORSet.
+           (merge-with set/union elements (.-elements other))))
+  (value [_]
+         (set (keys elements)))
+  (object->str [this]
+               (str (value this) " <ORSet" elements ">"))
 
-  (defn lww-add [^LWWSet s elem timestamp]
-    (LWWSet.
-     (assoc (.-additions s) elem timestamp)
-     (.-removals s)))
+  CRDTSet
+  (add [this [item tag]]
+       (ORSet. (update elements item (fnil conj #{}) tag)))
+  (del [this item]
+       (ORSet. (dissoc elements item))))
 
-  (defn lww-remove [^LWWSet s elem timestamp]
-    (LWWSet.
-     (.-additions s)
-     (assoc (.-removals s) elem timestamp)))
+(defn or-set []
+  (ORSet. {}))
 
-  ;; OR-Set (Observed-Remove Set)
-  (deftype ORSet [elements]         ; elements is a map of elem -> #{unique-tags}
-    CRDT
-    (merge* [this other]
-      (ORSet.
-       (merge-with set/union (.-elements this) (.-elements other))))
-    (value [_]
-      (set (keys elements))))
+(comment
+  (defn example-or-set []
+    (let [or1 (-> (or-set)
+                  (add [:a 1])
+                  (add [:b 2]))
+          or2 (-> (or-set)
+                  (add [:b 3])
+                  (add [:c 4]))]
+      {:or1 or1
+       :or2 or2
+       :merged (merge* or1 or2)})))
 
-  (defn or-set []
-    (ORSet. {}))
 
-  (defn unique-tag []
-    (str (java.util.UUID/randomUUID)))
-
-  (defn or-add [^ORSet s elem]
-    (ORSet.
-     (update (.-elements s) elem (fnil conj #{}) (unique-tag))))
-
-  (defn or-remove [^ORSet s elem]
-    (ORSet.
-     (dissoc (.-elements s) elem)))
-
+(comment
   ;; RGA (Replicated Growable Array) - a sequence CRDT
   (defrecord Position [replica-id counter])
 
@@ -290,15 +329,7 @@
 
   ;; Example usage functions
   (defn example-all-crdts []
-    (let [
-          ;; PN-Counter example
-          pn1 (-> (pn-counter :r1)
-                  (pn-increase :r1)
-                  (pn-decrement :r1))
-          pn2 (-> (pn-counter :r2)
-                  (pn-increase :r2))
-
-          ;; LWW-Set example
+    (let [;; LWW-Set example
           lww1 (-> (lww-set)
                    (lww-add :a 1)
                    (lww-add :b 2))
