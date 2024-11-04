@@ -30,7 +30,7 @@
           (GSet. (set/union items (.-items other))))
   (value [_] items)
   (object->str [this]
-               (str (value this) " <GSet:" (str (.-items this)) ">"))
+               (str (value this) " <GSet:" (str items) ">"))
 
   clojure.lang.IPersistentSet
   (cons [this item]
@@ -75,8 +75,8 @@
   (value [_]
          (set/difference additions tombstone))
   (object->str [this]
-               (str (value this) " <TwoPSet:" "additions: " (.-additions this)
-                    "tombstone: " (.-tombstone this) ">"))
+               (str (value this) " <TwoPSet:" "additions: " additions
+                    "tombstone: " tombstone ">"))
 
   clojure.lang.IPersistentSet
   (cons [this item]
@@ -120,18 +120,17 @@
 (defcrdt GCounter [counts]             ; counts is a map of replica-id -> count
   CRDT
   (merge* [this other]
-          (GCounter. (merge-with max (.-counts this) (.-counts other))))
+          (GCounter. (merge-with max counts (.-counts other))))
   (value [_]
          (apply + (vals counts)))
   (object->str [this]
-               (str (.-counts this) " <GCounter:"  (.-counts this) ">")))
+               (str counts " <GCounter:"  counts ">")))
 
 (defn g-counter [replica-id]
   (GCounter. {replica-id 0}))
 
 (defn increment [^GCounter counter replica-id]
-  (GCounter.
-   (update (.-counts counter) replica-id (fnil inc 0))))
+  (GCounter. (update (.-counts counter) replica-id (fnil inc 0))))
 
 (comment
   (defn example-g-counter []
@@ -141,9 +140,9 @@
                   (increment :r1))
           gc2 (-> (g-counter :r2)
                   (increment :r2))]
-      {:g-counter {:gc1 gc1
-                   :gc2 gc2
-                   :merged (merge* gc1 gc2)}})))
+      {:gc1 gc1
+       :gc2 gc2
+       :merged (merge* gc1 gc2)})))
 
 (comment
   ;; Print method for LWWSet
