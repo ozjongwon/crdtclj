@@ -1,4 +1,4 @@
-(ns crdt.types
+(ns crdt.crdt-types
   (:require [clojure.set :as set]))
 
 ;; Protocol for all CRDTs
