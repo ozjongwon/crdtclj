@@ -7,7 +7,7 @@
   (value [this] "Get the current value")
   (object->str [this] "For printing"))
 
-(defn print-crdt [crdt]
+(defn- print-crdt [crdt]
   (.write *out* (object->str crdt)))
 
 (defmacro defcrdt [name [& fields] & body]
@@ -129,96 +129,63 @@
 (defn g-counter [replica-id]
   (GCounter. {replica-id 0}))
 
-(defn increment [^GCounter counter replica-id]
-  (GCounter. (update (.-counts counter) replica-id (fnil inc 0))))
+;; PN-Counter (Positive-Negative Counter)
+(defcrdt PNCounter [increments decrements] ; Each is a G-Counter
+  CRDT
+  (merge* [this other]
+          (PNCounter. (merge-with max  increments (.-increments other))
+                      (merge-with max decrements (.-decrements other))))
+  (value [_]
+         (- (apply + (vals increments)) (apply + (vals decrements))))
+  (object->str [this]
+               (str increments decrements " <PNCounter:"  increments decrements ">")))
+
+(defn increase [counter replica-id]
+  (cond (instance? GCounter counter)
+        (GCounter. (update (.-counts counter) replica-id (fnil inc 0)))
+
+        (instance? PNCounter counter)
+        (PNCounter. (update (.-increments counter) replica-id (fnil inc 0))
+                    (.-decrements counter))
+
+        :else (ex-info "Unspported counter: " {:counter counter :id replica-id})))
+
+(defn decrease [^PNCounter counter replica-id]
+  (cond (instance? PNCounter counter)
+        (PNCounter. (.-increments counter)
+                    (update (.-decrements counter) replica-id (fnil dec 0)))
+
+        :else (ex-info "Unspported counter: " {:counter counter :id replica-id})))
+
+(defn pn-counter [replica-id]
+  (PNCounter. {replica-id 0} {replica-id 0}))
 
 (comment
   (defn example-g-counter []
     (let [ ;; G-Counter example
           gc1 (-> (g-counter :r1)
-                  (increment :r1)
-                  (increment :r1))
+                  (increase :r1)
+                  (increase :r1))
           gc2 (-> (g-counter :r2)
-                  (increment :r2))]
+                  (increase :r2))]
       {:gc1 gc1
        :gc2 gc2
        :merged (merge* gc1 gc2)})))
 
 (comment
-  ;; Print method for LWWSet
-  ;; (defmethod print-method LWWSet
-  ;;   [^LWWSet s ^Writer w]
-  ;;   (.write w "#LWWSet{:adds ")
-  ;;   (print-method (.-additions s) w)
-  ;;   (.write w ", :removes ")
-  ;;   (print-method (.-removals s) w)
-  ;;   (.write w "}"))
+  (defn example-pn-counter []
+    (let [ ;; PN-Counter example
+          pn1 (-> (pn-counter :r1)
+                  (increase :r1)
+                  (decrease :r1)
+                  (decrease :r2))
+          pn2 (-> (pn-counter :r2)
+                  (increase :r2))]
+      {:pn1  pn1
+       :pn2  pn2
+       :merged (merge* pn1 pn2)})))
 
-  ;; Print method for ORSet
-  ;; (defmethod print-method ORSet
-  ;;   [^ORSet s ^Writer w]
-  ;;   (.write w "#ORSet{:elements ")
-  ;;   (print-method (.-elements s) w)
-  ;;   (.write w "}"))
-
-  ;; Print method for Position (used in RGA)
-  ;; (defmethod print-method Position
-  ;;   [^Position p ^Writer w]
-  ;;   (.write w "#Position{:rid ")
-  ;;   (print-method (.-replica-id p) w)
-  ;;   (.write w ", :counter ")
-  ;;   (print-method (.-counter p) w)
-  ;;   (.write w "}"))
-
-  ;; Print method for RGANode
-  ;; (defmethod print-method RGANode
-  ;;   [^RGANode n ^Writer w]
-  ;;   (.write w "#RGANode{:value ")
-  ;;   (print-method (.-value n) w)
-  ;;   (.write w ", :pos ")
-  ;;   (print-method (.-position n) w)
-  ;;   (.write w ", :left ")
-  ;;   (print-method (.-left-pos n) w)
-  ;;   (.write w ", :deleted? ")
-  ;;   (print-method (.-deleted? n) w)
-  ;;   (.write w "}"))
-
-  ;; Print method for RGA
-  ;; (defmethod print-method RGA
-  ;;   [^RGA rga ^Writer w]
-  ;;   (.write w "#RGA{:nodes ")
-  ;;   (print-method (.-nodes rga) w)
-  ;;   (.write w ", :counter ")
-  ;;   (print-method (.-counter rga) w)
-  ;;   (.write w ", :rid ")
-  ;;   (print-method (.-replica-id rga) w)
-  ;;   (.write w "}"))
-
-
-
-  ;; PN-Counter (Positive-Negative Counter)
-  (deftype PNCounter [increments decrements] ; Each is a G-Counter
-    CRDT
-    (merge* [this other]
-      (PNCounter.
-       (merge* (.-increments this) (.-increments other))
-       (merge* (.-decrements this) (.-decrements other))))
-    (value [_]
-      (- (value increments) (value decrements))))
-
-  (defn pn-counter [replica-id]
-    (PNCounter. (g-counter replica-id) (g-counter replica-id)))
-
-  (defn pn-increment [^PNCounter counter replica-id]
-    (PNCounter.
-     (increment (.-increments counter) replica-id)
-     (.-decrements counter)))
-
-  (defn pn-decrement [^PNCounter counter replica-id]
-    (PNCounter.
-     (.-increments counter)
-     (increment (.-decrements counter) replica-id)))
-
+(comment
   ;; LWW-Element-Set (Last-Write-Wins-Element-Set)
   (deftype LWWSet [additions removals]   ; Each is a map of element -> timestamp
     CRDT
@@ -323,19 +290,13 @@
 
   ;; Example usage functions
   (defn example-all-crdts []
-    (let [ ;; G-Counter example
-          gc1 (-> (g-counter :r1)
-                  (increment :r1)
-                  (increment :r1))
-          gc2 (-> (g-counter :r2)
-                  (increment :r2))
-
+    (let [
           ;; PN-Counter example
           pn1 (-> (pn-counter :r1)
-                  (pn-increment :r1)
+                  (pn-increase :r1)
                   (pn-decrement :r1))
           pn2 (-> (pn-counter :r2)
-                  (pn-increment :r2))
+                  (pn-increase :r2))
 
           ;; LWW-Set example
           lww1 (-> (lww-set)
