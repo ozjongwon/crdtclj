@@ -10,12 +10,20 @@
 (defn print-crdt [crdt]
   (.write *out* (object->str crdt)))
 
-
 (defmacro defcrdt [name [& fields] & body]
-  `(do (deftype ~name [~@ fields]
-         ~@body)
-       (.addMethod clojure.pprint/simple-dispatch ~name print-crdt)))
+  (let [ipersistent #{'clojure.lang.IPersistentSet}
+        c (gensym "c")
+        w        (gensym "w")]
+    `(do (deftype ~name [~@ fields]
+           ~@body)
+         ~(if (some #(contains? ipersistent %) body)
+            `(.addMethod clojure.pprint/simple-dispatch ~name print-crdt)
+            `(defmethod print-method ~name [~(vary-meta c assoc :tag '~name)
+                                            ~(vary-meta w assoc :tag java.io.Writer)]
+               (binding [*out* ~w]
+                 (print-crdt ~c)))))))
 
+;; G-Set (Grow-only Set)
 (defcrdt GSet [items]
   CRDT
   (merge* [_ other]
@@ -40,12 +48,6 @@
   (disjoin [this k]
            (throw (UnsupportedOperationException. "Cannot remove items from G-Set"))))
 
-;; (defmethod print-method GSet [s writer]
-;;   (print-g-set s writer))
-
-;; (defmethod print-dup GSet [s writer]
-;;   (print-g-set s writer))
-
 ;; Constructor functions
 (defn g-set
   ([] (GSet. #{}))
@@ -64,7 +66,7 @@
        :replica2 replica2
        :merged merged})))
 
-
+;; Two-Phase Set (2P-Set) with additions and removals
 (defcrdt TwoPSet [additions tombstone]
   CRDT
   (merge* [_ other]
@@ -114,63 +116,36 @@
        :replica2 replica2
        :merged merged})))
 
-;; Two-Phase Set (2P-Set) with additions and removals
+;; G-Counter (Grow-only Counter)
+(defcrdt GCounter [counts]             ; counts is a map of replica-id -> count
+  CRDT
+  (merge* [this other]
+          (GCounter. (merge-with max (.-counts this) (.-counts other))))
+  (value [_]
+         (apply + (vals counts)))
+  (object->str [this]
+               (str (.-counts this) " <GCounter:"  (.-counts this) ">")))
+
+(defn g-counter [replica-id]
+  (GCounter. {replica-id 0}))
+
+(defn increment [^GCounter counter replica-id]
+  (GCounter.
+   (update (.-counts counter) replica-id (fnil inc 0))))
+
 (comment
-  (deftype TwoPSet [additions tombstone]
-    CRDT
-    (merge* [_ other]
-      (TwoPSet. (set/union additions (.-additions other))
-                (set/union tombstone (.-tombstone other))))
-    (value [_]
-      (set/difference additions tombstone))
-    (inspect [_] (list additions tombstone))
+  (defn example-g-counter []
+    (let [ ;; G-Counter example
+          gc1 (-> (g-counter :r1)
+                  (increment :r1)
+                  (increment :r1))
+          gc2 (-> (g-counter :r2)
+                  (increment :r2))]
+      {:g-counter {:gc1 gc1
+                   :gc2 gc2
+                   :merged (merge* gc1 gc2)}})))
 
-    clojure.lang.IPersistentSet
-    (cons [this item]
-      (if (contains? tombstone item)
-        this
-        (TwoPSet. (conj additions item) tombstone)))
-    (empty [_]
-      (TwoPSet. #{} #{}))
-    (equiv [_ other]
-      (= (set/difference additions tombstone)
-         (set/difference (.-additions other) (.-tombstone other))))
-    (seq [this]
-      (seq (value this)))
-    (get [this k]
-      (get (value this) k))
-    (contains [_ k]
-      (and (contains? additions k)
-           (not (contains? tombstone k))))
-    (disjoin [this k]
-      (TwoPSet. additions (conj tombstone k))))
-
-
-  ;; G-Counter (Grow-only Counter)
-  (deftype GCounter [counts]             ; counts is a map of replica-id -> count
-    CRDT
-    (merge* [this other]
-      (GCounter.
-       (merge-with max (.-counts this) (.-counts other))))
-    (value [_]
-      (apply + (vals counts))))
-
-  ;; Print method for GCounter
-  (defmethod print-method GCounter [^GCounter c ^java.io.Writer w]
-    (doto w
-      (.write "#GCounter{:counts ")
-      (.write (str 1))
-      (.write "}")))
-
-  ;; Print method for PNCounter
-  ;; (defmethod print-method PNCounter
-  ;;   [^PNCounter c ^Writer w]
-  ;;   (.write w "#PNCounter{:inc ")
-  ;;   (print-method (.-increments c) w)
-  ;;   (.write w ", :dec ")
-  ;;   (print-method (.-decrements c) w)
-  ;;   (.write w "}"))
-
+(comment
   ;; Print method for LWWSet
   ;; (defmethod print-method LWWSet
   ;;   [^LWWSet s ^Writer w]
@@ -220,12 +195,7 @@
   ;;   (print-method (.-replica-id rga) w)
   ;;   (.write w "}"))
 
-  (defn g-counter [replica-id]
-    (GCounter. {replica-id 0}))
 
-  (defn increment [^GCounter counter replica-id]
-    (GCounter.
-     (update (.-counts counter) replica-id (fnil inc 0))))
 
   ;; PN-Counter (Positive-Negative Counter)
   (deftype PNCounter [increments decrements] ; Each is a G-Counter
