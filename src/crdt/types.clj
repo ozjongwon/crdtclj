@@ -7,35 +7,38 @@
   (value [this] "Get the current value")
   (object->str [this] "For printing"))
 
-(defn print-crdt [crdt-str writer]
-  (.write writer crdt-str))
+(defn print-crdt [crdt]
+  (.write *out* (object->str crdt)))
 
-;; Grow-Only Set (G-Set)
-(deftype GSet [items]
+
+(defmacro defcrdt [name [& fields] & body]
+  `(do (deftype ~name [~@ fields]
+         ~@body)
+       (.addMethod clojure.pprint/simple-dispatch ~name print-crdt)))
+
+(defcrdt GSet [items]
   CRDT
   (merge* [_ other]
-    (GSet. (set/union items (.-items other))))
+          (GSet. (set/union items (.-items other))))
   (value [_] items)
   (object->str [this]
-    (str (value this) " <GSet:" (str (.-items this)) ">"))
+               (str (value this) " <GSet:" (str (.-items this)) ">"))
 
   clojure.lang.IPersistentSet
   (cons [this item]
-    (GSet. (conj items item)))
+        (GSet. (conj items item)))
   (empty [this]
-    (GSet. #{}))
+         (GSet. #{}))
   (equiv [this other]
-    (= items (.-items other)))
+         (= items (.-items other)))
   (seq [_]
-    (seq items))
+       (seq items))
   (get [_ k]
-    (get items k))
+       (get items k))
   (contains [_ k]
-    (contains? items k))
+            (contains? items k))
   (disjoin [this k]
-    (throw (UnsupportedOperationException. "Cannot remove items from G-Set"))))
-
-
+           (throw (UnsupportedOperationException. "Cannot remove items from G-Set"))))
 
 ;; (defmethod print-method GSet [s writer]
 ;;   (print-g-set s writer))
@@ -43,29 +46,73 @@
 ;; (defmethod print-dup GSet [s writer]
 ;;   (print-g-set s writer))
 
-
-(.addMethod clojure.pprint/simple-dispatch GSet
-            (fn [s]
-              (print-crdt (object->str s) *out*)))
-
-
 ;; Constructor functions
 (defn g-set
   ([] (GSet. #{}))
   ([& items] (GSet. (set items))))
 
-(defn example-g-set []
-  (let [replica1 (-> (g-set)
-                     (conj :a)
-                     (conj :b))
-        replica2 (-> (g-set)
-                     (conj :b)
-                     (conj :c))
-        merged (merge* replica1 replica2)]
-    {:replica1  replica1
-     :replica2 replica2
-     :merged merged}))
+(comment
+  (defn example-g-set []
+    (let [replica1 (-> (g-set)
+                       (conj :a)
+                       (conj :b))
+          replica2 (-> (g-set)
+                       (conj :b)
+                       (conj :c))
+          merged (merge* replica1 replica2)]
+      {:replica1  replica1
+       :replica2 replica2
+       :merged merged})))
 
+
+(defcrdt TwoPSet [additions tombstone]
+  CRDT
+  (merge* [_ other]
+          (TwoPSet. (set/union additions (.-additions other))
+                    (set/union tombstone (.-tombstone other))))
+  (value [_]
+         (set/difference additions tombstone))
+  (object->str [this]
+               (str (value this) " <TwoPSet:" "additions: " (.-additions this)
+                    "tombstone: " (.-tombstone this) ">"))
+
+  clojure.lang.IPersistentSet
+  (cons [this item]
+        (if (contains? tombstone item)
+          this
+          (TwoPSet. (conj additions item) tombstone)))
+  (empty [_]
+         (TwoPSet. #{} #{}))
+  (equiv [_ other]
+         (= (set/difference additions tombstone)
+            (set/difference (.-additions other) (.-tombstone other))))
+  (seq [this]
+       (seq (value this)))
+  (get [this k]
+       (get (value this) k))
+  (contains [_ k]
+            (and (contains? additions k)
+                 (not (contains? tombstone k))))
+  (disjoin [this k]
+           (TwoPSet. additions (conj tombstone k))))
+
+(defn two-p-set
+  ([] (TwoPSet. #{} #{}))
+  ([& items] (TwoPSet. (set items) #{})))
+
+(comment ;; Example usage functions
+  (defn example-2p-set []
+    (let [replica1 (-> (two-p-set)
+                       (conj :a)
+                       (conj :b)
+                       (disj :a))
+          replica2 (-> (two-p-set)
+                       (conj :b)
+                       (conj :c))
+          merged (merge* replica1 replica2)]
+      {:replica1 replica1
+       :replica2 replica2
+       :merged merged})))
 
 ;; Two-Phase Set (2P-Set) with additions and removals
 (comment
@@ -98,23 +145,6 @@
     (disjoin [this k]
       (TwoPSet. additions (conj tombstone k))))
 
-  (defn two-p-set
-    ([] (TwoPSet. #{} #{}))
-    ([& items] (TwoPSet. (set items) #{})))
-
-  ;; Example usage functions
-  (defn example-2p-set []
-    (let [replica1 (-> (two-p-set)
-                       (conj :a)
-                       (conj :b)
-                       (disj :a))
-          replica2 (-> (two-p-set)
-                       (conj :b)
-                       (conj :c))
-          merged (merge* replica1 replica2)]
-      {:replica1 replica1
-       :replica2 replica2
-       :merged merged}))
 
   ;; G-Counter (Grow-only Counter)
   (deftype GCounter [counts]             ; counts is a map of replica-id -> count
