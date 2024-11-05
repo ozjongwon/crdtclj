@@ -1,32 +1,53 @@
 (ns crdt.automerge
   (:require [clojure.data.priority-map :refer [priority-map]]
             [clojure.set :as set])
-  (:import [org.automerge AutomergeSys]))
+  (:import [org.automerge Document ObjectId ObjectType]))
 
 (defonce lib-initialized? false)
 
 (defrecord Document [pointer actor-id transaction-pointer])
 
-(defn make-document []
-  (when-not lib-initialized?
-    (try (do (clojure.lang.RT/loadLibrary "automerge_jni")
-             (alter-var-root #'lib-initialized? (constantly true))
-             (let [doc-ptr (AutomergeSys/createDoc)]
-               (println doc-ptr)
-               (map->Document {:pointer doc-ptr
-                               :actor-id (AutomergeSys/getActorId doc-ptr)})))
-         (catch Exception e
-           ;; FIXME: do something
-           (println e)))))
+;; (defn make-document []
+;;   (when-not lib-initialized?
+;;     (try (do (clojure.lang.RT/loadLibrary "automerge_jni")
+;;              (alter-var-root #'lib-initialized? (constantly true))
+;;              (let [doc-ptr (AutomergeSys/createDoc)]
+;;                (println doc-ptr)
+;;                (map->Document {:pointer doc-ptr
+;;                                :actor-id (AutomergeSys/getActorId doc-ptr)})))
+;;          (catch Exception e
+;;            ;; FIXME: do something
+;;            (println e)))))
 
-(let [doc (make-document)
+(let [doc (Document.)
       tx (.startTransaction doc)
       text (.set tx ObjectId/ROOT "text" ObjectType/TEXT)]
-  (.spliceText tx text 0  0 "Hello world")
-  (.commit tx tx)
+  (doto tx
+    (.spliceText text 0  0 "Hello world")
+    (.commit))
   (let [doc-bytes (.save doc)
-        doc2 (Document. (.load doc-bytes))]
-    (def result (str (.text doc2 text)))))
+        doc2 (Document/load doc-bytes)]
+    (-> (.text doc2 text)
+        (.get)
+        println)
+    (let [tx (.startTransaction doc2)]
+      (doto tx
+        (.spliceText text, 5, 0, " beautiful")
+        (.commit))
+      (-> (.text doc2 text)
+          (.get)
+          println))
+    (let [tx (.startTransaction doc)]
+      (doto tx
+        (.spliceText text, 5, 0, " there")
+        (.commit))
+      (-> (.text doc text)
+          (.get)
+          println))
+    (.merge doc doc2)
+    (-> (.text doc text)
+        (.get)
+        println)))
 
 
 (comment
