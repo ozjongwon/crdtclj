@@ -3,11 +3,7 @@
             [clojure.set :as set])
   (:import [org.automerge AutomergeSys Document ObjectId ObjectType BuildInfo]))
 
-;; (defn init-lib []
-;;   (list (BuildInfo/getExpectedRustLibVersion)
-;;         (AutomergeSys/rustLibVersion)))
-
-;; cd ~/Work/crdt/; lein clean; lein deps; ln -s target/native/x86_64-unknown-linux-gnu/libautomerge_jni.so target/native/x86_64-unknown-linux-gnu/libautomerge_jni_0_2_0.so
+;; cd ~/Work/crdt/; lein clean; lein deps; cd target/native/x86_64-unknown-linux-gnu/; ln -s libautomerge_jni.so libautomerge_jni_0_2_0.so
 
 ;;(init-lib)
 
@@ -95,34 +91,37 @@
      ~@body
      (.commit ~tx)))
 
+(defn init-lib []
+  (with-document-tx [doc tx]
+    (with-text [text tx]
+      (splice tx text "Hello World"))))
+
+
 (defn print-documents-text [doc1 doc2 text]
   (println "***\nDoc 1 text:" (document-text doc1 text)
            "\nDoc 2 text:" (document-text doc2 text)))
 
-(let [doc1 (atom nil)
-      doc2 (atom nil)
-      shared-text (atom nil)]
-  (with-document-tx [doc tx]
-    (with-text [text tx]
-      (splice tx text "Hello World")
-      (reset! doc1 doc)
-      (reset! shared-text text)))
-  (with-loading-document [doc (document-save @doc1)]
-    (print-documents-text @doc1 doc @shared-text)
-    (with-tx [tx doc]
-      (splice tx @shared-text " beautiful" 5))
-    (reset! doc2 doc))
-  (print-documents-text @doc1 @doc2 @shared-text)
-  (with-tx [tx @doc1]
-    (splice tx @shared-text " there" 5))
-  (print-documents-text @doc1 @doc2 @shared-text)
-  (document-merge @doc1 @doc2)
-  (print-documents-text @doc1 @doc2 @shared-text)
-  (document-merge @doc2 @doc1)
-  (print-documents-text @doc1 @doc2 @shared-text))
-
-
-
+;; (let [doc1 (atom nil)
+;;       doc2 (atom nil)
+;;       shared-text (atom nil)]
+;;   (with-document-tx [doc tx]
+;;     (with-text [text tx]
+;;       (splice tx text "Hello World")
+;;       (reset! doc1 doc)
+;;       (reset! shared-text text)))
+;;   (with-loading-document [doc (document-save @doc1)]
+;;     (print-documents-text @doc1 doc @shared-text)
+;;     (with-tx [tx doc]
+;;       (splice tx @shared-text " beautiful" 5))
+;;     (reset! doc2 doc))
+;;   (print-documents-text @doc1 @doc2 @shared-text)
+;;   (with-tx [tx @doc1]
+;;     (splice tx @shared-text " there" 5))
+;;   (print-documents-text @doc1 @doc2 @shared-text)
+;;   (document-merge @doc1 @doc2)
+;;   (print-documents-text @doc1 @doc2 @shared-text)
+;;   (document-merge @doc2 @doc1)
+;;   (print-documents-text @doc1 @doc2 @shared-text))
 
 (comment
 
