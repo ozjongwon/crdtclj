@@ -1,23 +1,15 @@
 (ns crdt.automerge
   (:require [clojure.data.priority-map :refer [priority-map]]
             [clojure.set :as set])
-  (:import [org.automerge Document ObjectId ObjectType]))
+  (:import [org.automerge AutomergeSys Document ObjectId ObjectType BuildInfo]))
 
-(defonce lib-initialized? false)
+;; (defn init-lib []
+;;   (list (BuildInfo/getExpectedRustLibVersion)
+;;         (AutomergeSys/rustLibVersion)))
 
-(defrecord Document [pointer actor-id transaction-pointer])
+;; cd ~/Work/crdt/; lein clean; lein deps; ln -s target/native/x86_64-unknown-linux-gnu/libautomerge_jni.so target/native/x86_64-unknown-linux-gnu/libautomerge_jni_0_2_0.so
 
-;; (defn make-document []
-;;   (when-not lib-initialized?
-;;     (try (do (clojure.lang.RT/loadLibrary "automerge_jni")
-;;              (alter-var-root #'lib-initialized? (constantly true))
-;;              (let [doc-ptr (AutomergeSys/createDoc)]
-;;                (println doc-ptr)
-;;                (map->Document {:pointer doc-ptr
-;;                                :actor-id (AutomergeSys/getActorId doc-ptr)})))
-;;          (catch Exception e
-;;            ;; FIXME: do something
-;;            (println e)))))
+;;(init-lib)
 
 (let [doc (Document.)
       tx (.startTransaction doc)
@@ -48,6 +40,88 @@
     (-> (.text doc text)
         (.get)
         println)))
+
+;; 1. Create a doc /w Tx
+;; 2. Create a text (content of the doc)
+;; 3. Edit the text (check text)
+;; 4. Commit
+;; 5. Save the doc
+;; 6. Create another doc from the save /w Tx
+;; 7. Check the content text is same as the previous text
+;; 8. Edit the text (check text)
+;; 9. Commit
+;; 10. Start a transaction with the first doc
+;; 11. Edit the text (check text)
+;; 12. Commit
+;; 13. check the text
+;; 14. Merge doc1
+;; 15 check content of doc1 and doc2
+;;
+
+(defmacro with-document-tx [[doc tx] & body]
+  `(let [~doc (Document.)
+         ~tx (.startTransaction ~doc)]
+     ~@body
+     (.commit ~tx)))
+
+(defn splice
+  ([tx text content]
+   (splice tx text content 0 0))
+  ([tx text content start]
+   (splice tx text content start 0))
+  ([tx text content start delete-count]
+   (.spliceText tx text start delete-count content)))
+
+(defmacro with-text [[text tx] & body]
+  `(let [~text  (.set ~tx ObjectId/ROOT "text" ObjectType/TEXT)]
+     ~@body))
+
+(defn document-save [doc]
+  (.save doc))
+
+(defn document-text [doc text]
+  (-> (.text doc text)
+      .get))
+
+(defn document-merge [doc1 doc2]
+  (.merge doc1 doc2))
+
+(defmacro with-loading-document [[doc doc-bytes] & body]
+  `(let [~doc (Document/load ~doc-bytes)]
+     ~@body))
+
+(defmacro with-tx [[tx doc] & body]
+  `(let [~tx (.startTransaction ~doc)]
+     ~@body
+     (.commit ~tx)))
+
+(defn print-documents-text [doc1 doc2 text]
+  (println "***\nDoc 1 text:" (document-text doc1 text)
+           "\nDoc 2 text:" (document-text doc2 text)))
+
+(let [doc1 (atom nil)
+      doc2 (atom nil)
+      shared-text (atom nil)]
+  (with-document-tx [doc tx]
+    (with-text [text tx]
+      (splice tx text "Hello World")
+      (reset! doc1 doc)
+      (reset! shared-text text)))
+  (with-loading-document [doc (document-save @doc1)]
+    (print-documents-text @doc1 doc @shared-text)
+    (with-tx [tx doc]
+      (splice tx @shared-text " beautiful" 5))
+    (reset! doc2 doc))
+  (print-documents-text @doc1 @doc2 @shared-text)
+  (with-tx [tx @doc1]
+    (splice tx @shared-text " there" 5))
+  (print-documents-text @doc1 @doc2 @shared-text)
+  (document-merge @doc1 @doc2)
+  (print-documents-text @doc1 @doc2 @shared-text)
+  (document-merge @doc2 @doc1)
+  (print-documents-text @doc1 @doc2 @shared-text))
+
+
 
 
 (comment
