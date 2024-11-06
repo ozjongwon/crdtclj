@@ -5,38 +5,6 @@
 
 ;; cd ~/Work/crdt/; lein clean; lein deps; cd target/native/x86_64-unknown-linux-gnu/; ln -s libautomerge_jni.so libautomerge_jni_0_2_0.so
 
-;;(init-lib)
-
-(let [doc (Document.)
-      tx (.startTransaction doc)
-      text (.set tx ObjectId/ROOT "text" ObjectType/TEXT)]
-  (doto tx
-    (.spliceText text 0  0 "Hello world")
-    (.commit))
-  (let [doc-bytes (.save doc)
-        doc2 (Document/load doc-bytes)]
-    (-> (.text doc2 text)
-        (.get)
-        println)
-    (let [tx (.startTransaction doc2)]
-      (doto tx
-        (.spliceText text, 5, 0, " beautiful")
-        (.commit))
-      (-> (.text doc2 text)
-          (.get)
-          println))
-    (let [tx (.startTransaction doc)]
-      (doto tx
-        (.spliceText text, 5, 0, " there")
-        (.commit))
-      (-> (.text doc text)
-          (.get)
-          println))
-    (.merge doc doc2)
-    (-> (.text doc text)
-        (.get)
-        println)))
-
 ;; 1. Create a doc /w Tx
 ;; 2. Create a text (content of the doc)
 ;; 3. Edit the text (check text)
@@ -101,27 +69,28 @@
   (println "***\nDoc 1 text:" (document-text doc1 text)
            "\nDoc 2 text:" (document-text doc2 text)))
 
-;; (let [doc1 (atom nil)
-;;       doc2 (atom nil)
-;;       shared-text (atom nil)]
-;;   (with-document-tx [doc tx]
-;;     (with-text [text tx]
-;;       (splice tx text "Hello World")
-;;       (reset! doc1 doc)
-;;       (reset! shared-text text)))
-;;   (with-loading-document [doc (document-save @doc1)]
-;;     (print-documents-text @doc1 doc @shared-text)
-;;     (with-tx [tx doc]
-;;       (splice tx @shared-text " beautiful" 5))
-;;     (reset! doc2 doc))
-;;   (print-documents-text @doc1 @doc2 @shared-text)
-;;   (with-tx [tx @doc1]
-;;     (splice tx @shared-text " there" 5))
-;;   (print-documents-text @doc1 @doc2 @shared-text)
-;;   (document-merge @doc1 @doc2)
-;;   (print-documents-text @doc1 @doc2 @shared-text)
-;;   (document-merge @doc2 @doc1)
-;;   (print-documents-text @doc1 @doc2 @shared-text))
+(defn example []
+  (let [doc1 (atom nil)
+        doc2 (atom nil)
+        shared-text (atom nil)]
+    (with-document-tx [doc tx]
+      (with-text [text tx]
+        (splice tx text "Hello World")
+        (reset! doc1 doc)
+        (reset! shared-text text)))
+    (with-loading-document [doc (document-save @doc1)]
+      (print-documents-text @doc1 doc @shared-text)
+      (with-tx [tx doc]
+        (splice tx @shared-text " beautiful" 5))
+      (reset! doc2 doc))
+    (print-documents-text @doc1 @doc2 @shared-text)
+    (with-tx [tx @doc1]
+      (splice tx @shared-text " there" 5))
+    (print-documents-text @doc1 @doc2 @shared-text)
+    (document-merge @doc1 @doc2)
+    (print-documents-text @doc1 @doc2 @shared-text)
+    (document-merge @doc2 @doc1)
+    (print-documents-text @doc1 @doc2 @shared-text)))
 
 (comment
 
